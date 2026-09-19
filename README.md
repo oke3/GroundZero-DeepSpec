@@ -1,85 +1,277 @@
-# DeepSpec
+# GroundZero-DeepSpec
 
-DeepSpec is a full-stack codebase for training and evaluating draft models for speculative decoding. It contains data preparation utilities, draft model implementations, training code, and evaluation scripts.
+> Under the hood of LLM code intelligence — train and evaluate speculative-decoding draft models.
 
-## Environment
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Ground Zero LLC](https://img.shields.io/badge/Built%20by-Ground%20Zero%20LLC-purple)](https://github.com/oke3)
+[![Python](https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white)](https://python.org)
 
-Install the Python dependencies:
+DeepSpec is a full-stack codebase for training and evaluating draft models for speculative decoding.
+It contains data preparation utilities, draft model implementations, training code, and evaluation
+scripts — everything you need to benchmark how well small models can predict what large models will
+generate, accelerating inference without sacrificing quality.
 
-```bash
-python -m pip install -r requirements.txt
+This is a Ground Zero LLC fork of the original DeepSpec research codebase, maintained for
+reproducibility and extensibility.
+
+---
+
+## Why
+
+Speculative decoding is one of the most practical ways to accelerate LLM inference: a small
+"draft" model proposes tokens, a large "target" model verifies them in parallel. When the draft
+is right, you get multiple tokens for the cost of one forward pass.
+
+But training a good draft model is non-trivial. You need:
+
+1. **Target cache generation** — run the target model over training data to produce hidden-state
+   caches for the draft to learn from.
+2. **Architecture design** — the draft must read the target's internal representations and
+   propose tokens that match the target's distribution.
+3. **Evaluation** — measure acceptance rates across diverse benchmarks to know if your draft
+   actually helps.
+
+DeepSpec provides all three stages in a single, reproducible pipeline.
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  DATA PREPARATION                                        │
+│  ┌────────────┐  ┌──────────────┐  ┌────────────────┐  │
+│  │ Download   │─▶│ Regenerate   │─▶│ Build Target   │  │
+│  │ Prompts    │  │ Target       │  │ Cache (hidden  │  │
+│  │ (JSONL)    │  │ Answers      │  │ states/layer)  │  │
+│  └────────────┘  └──────────────┘  └────────────────┘  │
+└──────────────────────┬──────────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│  TRAINING                                                │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │  deepspec/trainer/                                │   │
+│  │  BaseTrainer → DSpark Trainer | Eagle3 Trainer    │   │
+│  │  Config: config/dspark/ | config/eagle3/          │   │
+│  │  Output: ~/checkpoints/<project>/<exp>/step_*     │   │
+│  └──────────────────────────────────────────────────┘   │
+└──────────────────────┬──────────────────────────────────┘
+                       ▼
+┌─────────────────────────────────────────────────────────┐
+│  EVALUATION                                              │
+│  ┌──────────────────────────────────────────────────┐   │
+│  │  deepspec/eval/                                   │   │
+│  │  Speculative-decoding loop: propose → verify →    │   │
+│  │  accept/reject across 9 benchmarks                │   │
+│  └──────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
 ```
 
-Data preparation additionally requires an inference engine to serve the target model when regenerating answers; see [scripts/data/README.md](./scripts/data/README.md) for details.
+### Module Overview
 
-## Workflow
+| Module | Purpose |
+|--------|---------|
+| `deepspec/modeling/` | Draft model architectures (DSpark, Eagle3) |
+| `deepspec/trainer/` | DDP-aware training loops, checkpoint management |
+| `deepspec/eval/` | Speculative-decoding evaluation with acceptance-rate metrics |
+| `deepspec/data/` | Dataset loading, target-cache datasets, CUDA prefetching |
+| `deepspec/utils/` | Config loading, seeding, distributed init, sampling |
+| `config/` | Per-algorithm × per-target-model training configurations |
+| `scripts/` | Shell wrappers for data prep, training, and evaluation |
 
-Run the stages in order — each stage's output feeds the next:
-
-1. **Data Preparation** — download prompts, regenerate target answers, and build the target cache.
-2. **Training** — train a draft model against the cached target outputs.
-3. **Evaluation** — measure speculative-decoding acceptance on benchmark tasks.
-
-## Data Preparation
-
-See [scripts/data/README.md](./scripts/data/README.md) for the step-by-step data pipeline:
-
-1. download and split training data,
-2. regenerate answers,
-3. prepare the target cache (storage warning: this can be very large — roughly 38 TB for the default `Qwen/Qwen3-4B` setting).
-
-## Training
-
-```bash
-bash scripts/train/train.sh
-```
-
-`train.sh` launches `train.py`, which spawns one worker per visible GPU. Select the algorithm and target model by pointing `config_path` at one of the configs under [config/](./config/) (e.g. `config/dspark/dspark_qwen3_4b.py`); see the script header for the full list of configs, how to override `config_path` / `target_cache_dir`, and how to use `--opts` to override individual config fields. Checkpoints are written to `~/checkpoints/<project_name>/<exp_name>/step_*`.
-
-Hardware: the default configs and scripts assume a single node with 8 GPUs. For fewer GPUs, reduce `CUDA_VISIBLE_DEVICES`.
-
-
-## Evaluation
-
-```bash
-bash scripts/eval/eval.sh
-```
-
-`eval.sh` runs `eval.py` against a trained draft checkpoint over the speculative-decoding benchmarks in [eval_datasets/](./eval_datasets/) (gsm8k, math500, aime25, humaneval, mbpp, livecodebench, mt-bench, alpaca, arena-hard-v2). Set:
-
-- `target_name_or_path` — the target model the draft was trained against (e.g. `Qwen/Qwen3-4B`),
-- `draft_name_or_path` — the draft checkpoint, e.g. `~/checkpoints/deepspec/dspark_block8_qwen3_4b/step_latest`, or one of the Hugging Face repo IDs listed in [Released Checkpoints](#released-checkpoints).
-
-### Released Checkpoints
-
-The checkpoints below are the ones used for Table 1 in the [paper](./DSpark_paper.pdf). Each checkpoint was trained on [open-perfectblend](https://huggingface.co/datasets/mlabonne/open-perfectblend) data generated by its corresponding target model in non-thinking mode, and is the direct output of the corresponding training configuration under [config/](./config/).
-
-
-| Algorithm | `Qwen/Qwen3-4B` | `Qwen/Qwen3-8B` | `Qwen/Qwen3-14B` | `google/gemma-4-12B-it` |
-| --- | --- | --- | --- | --- |
-| Eagle3 | [deepseek-ai/eagle3_qwen3_4b_ttt7](https://huggingface.co/deepseek-ai/eagle3_qwen3_4b_ttt7) | [deepseek-ai/eagle3_qwen3_8b_ttt7](https://huggingface.co/deepseek-ai/eagle3_qwen3_8b_ttt7) | [deepseek-ai/eagle3_qwen3_14b_ttt7](https://huggingface.co/deepseek-ai/eagle3_qwen3_14b_ttt7) | [deepseek-ai/eagle3_gemma4_12b_ttt7](https://huggingface.co/deepseek-ai/eagle3_gemma4_12b_ttt7) |
-| DFlash | [deepseek-ai/dflash_qwen3_4b_block7](https://huggingface.co/deepseek-ai/dflash_qwen3_4b_block7) | [deepseek-ai/dflash_qwen3_8b_block7](https://huggingface.co/deepseek-ai/dflash_qwen3_8b_block7) | [deepseek-ai/dflash_qwen3_14b_block7](https://huggingface.co/deepseek-ai/dflash_qwen3_14b_block7) | [deepseek-ai/dflash_gemma4_12b_block7](https://huggingface.co/deepseek-ai/dflash_gemma4_12b_block7) |
-| DSpark | [deepseek-ai/dspark_qwen3_4b_block7](https://huggingface.co/deepseek-ai/dspark_qwen3_4b_block7) | [deepseek-ai/dspark_qwen3_8b_block7](https://huggingface.co/deepseek-ai/dspark_qwen3_8b_block7) | [deepseek-ai/dspark_qwen3_14b_block7](https://huggingface.co/deepseek-ai/dspark_qwen3_14b_block7) | [deepseek-ai/dspark_gemma4_12b_block7](https://huggingface.co/deepseek-ai/dspark_gemma4_12b_block7) |
-
-> [!IMPORTANT]
-> If you cite these results in a new paper, align your setup with the training settings in this repository; otherwise, the comparison is not meaningful. For domain-specific use, fine-tune the draft model again for better results, especially if the target model is expected to run in thinking mode.
+---
 
 ## Supported Algorithms
 
-Currently, DeepSpec includes three draft models: [DSpark](./DSpark_paper.pdf), [DFlash](https://arxiv.org/abs/2602.06036) and [Eagle3](https://arxiv.org/abs/2503.01840).
+| Algorithm | Paper | Key Idea |
+|-----------|-------|----------|
+| **DSpark** | [DSpark paper](./DSpark_paper.pdf) | Markov head + confidence head on target hidden states |
+| **DFlash** | [arXiv:2602.06036](https://arxiv.org/abs/2602.06036) | Flash-attention-based draft with cross-layer attention |
+| **Eagle3** | [arXiv:2503.01840](https://arxiv.org/abs/2503.01840) | Autoregressive draft with target-layer feature fusion |
 
-## License
+Target models: **Qwen3** (4B, 8B, 14B) and **Gemma 4** (12B it).
 
-DeepSpec is released under the [MIT License](./LICENSE). It includes code adapted
-from third-party projects under their own licenses; see [NOTICE](./NOTICE) for the
-full attribution.
+---
+
+## Benchmarks
+
+| Benchmark | Samples | Domain |
+|-----------|---------|--------|
+| GSM8K | 500 | Grade-school math |
+| MATH-500 | 500 | Competition math |
+| AIME 2025 | 30 | American Invitational Math Exam |
+| HumanEval | 164 | Code generation (Python) |
+| MBPP | 256 | Basic Python problems |
+| LiveCodeBench | 500 | Competitive programming |
+| MT-Bench | 80 | Multi-turn instructions |
+| Alpaca | 500 | General instructions |
+| Arena-Hard-v2 | 500 | Hard prompt arena |
+
+Each benchmark measures **acceptance rate** (draft tokens accepted by target) and **acceptance
+length** (average consecutive accepted tokens).
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.10+
+- CUDA-capable GPU(s) — default configs assume 8 GPUs on a single node
+
+### Installation
+
+```bash
+git clone https://github.com/oke3/GroundZero-DeepSpec.git
+cd GroundZero-DeepSpec
+python -m venv .venv && source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+> Install the CUDA build of PyTorch matching your machine if the default wheel is wrong.
+
+### Data Preparation
+
+```bash
+bash scripts/data/prepare.sh
+```
+
+See [scripts/data/README.md](./scripts/data/README.md) for the full pipeline. **Storage warning:**
+the target cache can be ~38 TB for `Qwen/Qwen3-4B`.
+
+### Training
+
+```bash
+bash scripts/train/train.sh --config config/dspark/dspark_qwen3_4b.py
+```
+
+Override config values with `--opts`:
+
+```bash
+bash scripts/train/train.sh --config config/dspark/dspark_qwen3_4b.py \
+  --opts data.max_length 2048 train.global_batch_size 256
+```
+
+Checkpoints → `~/checkpoints/<project>/<exp>/step_*`. For fewer GPUs, set `CUDA_VISIBLE_DEVICES`.
+
+### Evaluation
+
+```bash
+bash scripts/eval/eval.sh \
+  --target_name_or_path Qwen/Qwen3-4B \
+  --draft_name_or_path ~/checkpoints/deepspec/dspark_block8_qwen3_4b/step_latest
+```
+
+Or use a released Hugging Face checkpoint:
+
+```bash
+bash scripts/eval/eval.sh \
+  --target_name_or_path Qwen/Qwen3-4B \
+  --draft_name_or_path deepseek-ai/dspark_qwen3_4b_block7
+```
+
+Optional flags: `--max-new-tokens` (2048), `--temperature` (1.0), `--confidence-threshold` (0.0),
+`--tensorboard-dir`, `--step`, `--seed` (980406).
+
+---
+
+## Released Checkpoints
+
+Used for Table 1 in the [paper](./DSpark_paper.pdf). Trained on
+[open-perfectblend](https://huggingface.co/datasets/mlabonne/open-perfectblend).
+
+| Algorithm | `Qwen3-4B` | `Qwen3-8B` | `Qwen3-14B` | `Gemma4-12B` |
+| --- | --- | --- | --- | --- |
+| Eagle3 | [eagle3_qwen3_4b_ttt7](https://huggingface.co/deepseek-ai/eagle3_qwen3_4b_ttt7) | [eagle3_qwen3_8b_ttt7](https://huggingface.co/deepseek-ai/eagle3_qwen3_8b_ttt7) | [eagle3_qwen3_14b_ttt7](https://huggingface.co/deepseek-ai/eagle3_qwen3_14b_ttt7) | [eagle3_gemma4_12b_ttt7](https://huggingface.co/deepseek-ai/eagle3_gemma4_12b_ttt7) |
+| DFlash | [dflash_qwen3_4b_block7](https://huggingface.co/deepseek-ai/dflash_qwen3_4b_block7) | [dflash_qwen3_8b_block7](https://huggingface.co/deepseek-ai/dflash_qwen3_8b_block7) | [dflash_qwen3_14b_block7](https://huggingface.co/deepseek-ai/dflash_qwen3_14b_block7) | [dflash_gemma4_12b_block7](https://huggingface.co/deepseek-ai/dflash_gemma4_12b_block7) |
+| DSpark | [dspark_qwen3_4b_block7](https://huggingface.co/deepseek-ai/dspark_qwen3_4b_block7) | [dspark_qwen3_8b_block7](https://huggingface.co/deepseek-ai/dspark_qwen3_8b_block7) | [dspark_qwen3_14b_block7](https://huggingface.co/deepseek-ai/dspark_qwen3_14b_block7) | [dspark_gemma4_12b_block7](https://huggingface.co/deepseek-ai/dspark_gemma4_12b_block7) |
+
+> [!IMPORTANT]
+> Align your setup with this repo's training settings when citing; otherwise comparisons are
+> not meaningful. For domain-specific use, fine-tune the draft model again.
+
+---
+
+## Project Structure
+
+```
+GroundZero-DeepSpec/
+├── config/              # Training configs (dspark/, dflash/, eagle3/)
+├── deepspec/
+│   ├── data/            # Dataset loading, target-cache, CUDA prefetch
+│   ├── eval/            # Speculative-decoding evaluation loop
+│   ├── modeling/        # Draft architectures (dspark/, eagle3/)
+│   ├── trainer/         # Training loops, checkpoint management
+│   └── utils/           # Config, seeding, distributed, sampling
+├── eval_datasets/       # JSONL benchmark datasets
+├── scripts/             # Shell wrappers (data/, eval/, train/)
+├── train.py             # Training entry point
+├── eval.py              # Evaluation entry point
+└── DSpark_paper.pdf     # DSpark research paper
+```
+
+---
+
+## Research
+
+DeepSpec is designed for research reproducibility:
+
+- **Deterministic seeding** — `seed_all()` at every stage boundary.
+- **DDP-first** — `torch.multiprocessing.spawn` for training; `torch.distributed` for eval aggregation.
+- **Target cache** — Pre-computed hidden states ensure draft training matches inference.
+- **Config-driven** — Every hyperparameter in a Python config file, logged with checkpoints.
+
+### Adding a New Algorithm
+
+1. Create `deepspec/modeling/<algorithm>/`.
+2. Implement a trainer subclass in `deepspec/trainer/`.
+3. Implement an evaluator subclass in `deepspec/eval/`.
+4. Add a config under `config/<algorithm>/`.
+5. Register the evaluator in `eval.py`'s `EVALUATORS` dict.
+
+---
+
+## Citation
+
+```bibtex
+@misc{deepspec2026,
+  title={DeepSpec: Training and Evaluating Speculative-Decoding Draft Models},
+  author={The DeepSpec Authors},
+  year={2026},
+  publisher={GitHub},
+  url={https://github.com/oke3/GroundZero-DeepSpec}
+}
+```
+
+---
 
 ## Acknowledgements
 
-DeepSpec builds on the ideas and code of several excellent open-source projects:
+DeepSpec builds on [SpecForge](https://github.com/sgl-project/SpecForge) (Apache-2.0),
+[DFlash](https://github.com/z-lab/dflash) (MIT),
+[Qwen3](https://github.com/QwenLM/Qwen3), and
+[Gemma](https://github.com/google-deepmind/gemma). See [NOTICE](./NOTICE) for full attribution.
 
-- [SpecForge](https://github.com/sgl-project/SpecForge) (Apache-2.0) — the overall training framework and Eagle3 implementation; portions of the Eagle3 modeling, loss, optimizer, attention, and evaluation code are adapted from it. Adapted files carry an in-file attribution comment, and the full notice is recorded in [NOTICE](./NOTICE).
-- [DFlash](https://github.com/z-lab/dflash) (MIT) — the DFlash draft-model design and training recipe.
-- [Qwen3](https://github.com/QwenLM/Qwen3) and [Gemma](https://github.com/google-deepmind/gemma) — the target model families supported in this repo.
+---
 
-We thank the authors and maintainers of these projects. Contributions of new algorithms are welcome.
+## Related Projects
+
+| Project | What It Does |
+|---------|-------------|
+| [gz-context-engine](https://github.com/oke3/gz-context-engine) | Production-grade RAG context engine |
+| [gz-modelrouter](https://github.com/oke3/gz-modelrouter) | Intelligent LLM cost router |
+| [hyperframes](https://github.com/oke3/hyperframes) | Agent-native video rendering |
+
+---
+
+## License
+
+[MIT](./LICENSE) — see [NOTICE](./NOTICE) for third-party attributions.
+
+---
+
+MIT — Ground Zero LLC
+
+---
+
+Built by [Ground Zero LLC](https://github.com/oke3) — AI infrastructure for the agentic age.
