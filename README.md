@@ -264,6 +264,21 @@ DeepSpec builds on [SpecForge](https://github.com/sgl-project/SpecForge) (Apache
 
 ---
 
+---
+
+## Enterprise Support
+
+Need this customized for your infrastructure? We offer:
+
+- **Integration consulting** — Wire GroundZero-DeepSpec into your research pipeline
+- **Custom configuration** — Task-specific rules, models, and workflows for your team
+- **Managed deployment** — We host and maintain your instance
+- **Training workshops** — Hands-on sessions for your engineering team
+
+[Book a 30-min call](https://www.grndxero.com/brief) · [See pricing](https://www.grndxero.com/pricing)
+
+---
+
 ## License
 
 [MIT](./LICENSE) — see [NOTICE](./NOTICE) for third-party attributions.
