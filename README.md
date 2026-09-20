@@ -281,10 +281,6 @@ Need this customized for your infrastructure? We offer:
 
 ## License
 
-[MIT](./LICENSE) — see [NOTICE](./NOTICE) for third-party attributions.
-
----
-
 MIT — Ground Zero LLC
 
 ---
