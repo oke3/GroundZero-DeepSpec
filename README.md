@@ -260,6 +260,7 @@ DeepSpec builds on [SpecForge](https://github.com/sgl-project/SpecForge) (Apache
 |---------|-------------|
 | [gz-context-engine](https://github.com/oke3/gz-context-engine) | Production-grade RAG context engine |
 | [gz-modelrouter](https://github.com/oke3/gz-modelrouter) | Intelligent LLM cost router |
+| [gz-gateway](https://github.com/oke3/gz-gateway) | OpenAI-compatible AI gateway — rate limiting, caching, failover, cost tracking |
 | [hyperframes](https://github.com/oke3/hyperframes) | Agent-native video rendering |
 
 ---
